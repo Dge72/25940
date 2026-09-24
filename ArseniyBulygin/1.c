@@ -55,20 +55,20 @@ void print_pids(void) {
     printf("pgid=%d\n", (int)getpgrp());
 }
 
+/* -u: печатает значение ulimit, как shell-команда `ulimit -u`
+   (RLIMIT_NPROC — максимальное число процессов/потоков пользователя). */
 void print_ulimit(void) {
     struct rlimit rl;
-    if (getrlimit(RLIMIT_FSIZE, &rl) == 0) {
-        printf("ulimit (RLIMIT_FSIZE): soft=");
+    if (getrlimit(RLIMIT_NPROC, &rl) == 0) {
         print_rlim_value(rl.rlim_cur);
-        printf(", hard=");
-        print_rlim_value(rl.rlim_max);
         printf("\n");
     } else {
-        perror("getrlimit(RLIMIT_FSIZE)");
+        perror("getrlimit(RLIMIT_NPROC)");
     }
 }
 
-void set_ulimit(const char *val) {
+
+static void set_rlimit_soft(int resource, const char *val, const char *name) {
     char *end;
     long v;
     struct rlimit rl;
@@ -76,17 +76,21 @@ void set_ulimit(const char *val) {
     errno = 0;
     v = strtol(val, &end, 10);
     if (errno != 0 || end == val || *end != '\0' || v < 0) {
-        fprintf(stderr, "invalid ulimit value: '%s'\n", val);
+        fprintf(stderr, "invalid %s value: '%s'\n", name, val);
         return;
     }
 
-    if (getrlimit(RLIMIT_FSIZE, &rl) != 0) {
-        perror("getrlimit(RLIMIT_FSIZE)");
+    if (getrlimit(resource, &rl) != 0) {
+        perror("getrlimit");
         return;
     }
     rl.rlim_cur = (rlim_t)v;
-    if (setrlimit(RLIMIT_FSIZE, &rl) != 0)
-        perror("setrlimit(RLIMIT_FSIZE)");
+    if (setrlimit(resource, &rl) != 0)
+        perror("setrlimit");
+}
+
+void set_ulimit(const char *val) {
+    set_rlimit_soft(RLIMIT_NPROC, val, "ulimit");
 }
 
 void print_core(void) {
@@ -103,24 +107,7 @@ void print_core(void) {
 }
 
 void set_core(const char *val) {
-    char *end;
-    long v;
-    struct rlimit rl;
-
-    errno = 0;
-    v = strtol(val, &end, 10);
-    if (errno != 0 || end == val || *end != '\0' || v < 0) {
-        fprintf(stderr, "invalid core size: '%s'\n", val);
-        return;
-    }
-
-    if (getrlimit(RLIMIT_CORE, &rl) != 0) {
-        perror("getrlimit(RLIMIT_CORE)");
-        return;
-    }
-    rl.rlim_cur = (rlim_t)v;
-    if (setrlimit(RLIMIT_CORE, &rl) != 0)
-        perror("setrlimit(RLIMIT_CORE)");
+    set_rlimit_soft(RLIMIT_CORE, val, "core size");
 }
 
 void print_cwd(void) {
@@ -160,8 +147,7 @@ void set_env(const char *arg) {
 
 int main(int argc, char *argv[]) {
     int opt;
-    /* ':' в начале — getopt возвращает ':' при отсутствии аргумента у опции,
-       а не '?'. opterr = 0 — сами печатаем сообщения об ошибках. */
+ 
     opterr = 0;
 
     while ((opt = getopt(argc, argv, ":ispuU:cC:dvV:")) != -1) {
@@ -199,10 +185,10 @@ int main(int argc, char *argv[]) {
             case 'V':
                 set_env(optarg);
                 break;
-            case ':':   /* отсутствует обязательный аргумент */
+            case ':':  
                 fprintf(stderr, "option -%c requires an argument\n", optopt);
                 break;
-            case '?':   /* неизвестная опция */
+            case '?':   
                 if (optopt != 0)
                     fprintf(stderr, "invalid option: -%c\n", optopt);
                 else
@@ -213,7 +199,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* Необязательно: показать оставшиеся аргументы (не-опции) */
     if (optind < argc) {
         fprintf(stderr, "non-option arguments:");
         for (int i = optind; i < argc; i++)
