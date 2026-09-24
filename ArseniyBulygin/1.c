@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -8,6 +9,10 @@
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
+
+#ifndef RLIMIT_NPROC
+#define RLIMIT_NPROC 6
+#endif
 
 extern char **environ;
 
@@ -55,8 +60,6 @@ void print_pids(void) {
     printf("pgid=%d\n", (int)getpgrp());
 }
 
-/* -u: печатает значение ulimit, как shell-команда `ulimit -u`
-   (RLIMIT_NPROC — максимальное число процессов/потоков пользователя). */
 void print_ulimit(void) {
     struct rlimit rl;
     if (getrlimit(RLIMIT_NPROC, &rl) == 0) {
@@ -66,7 +69,6 @@ void print_ulimit(void) {
         perror("getrlimit(RLIMIT_NPROC)");
     }
 }
-
 
 static void set_rlimit_soft(int resource, const char *val, const char *name) {
     char *end;
@@ -147,7 +149,6 @@ void set_env(const char *arg) {
 
 int main(int argc, char *argv[]) {
     int opt;
- 
     opterr = 0;
 
     while ((opt = getopt(argc, argv, ":ispuU:cC:dvV:")) != -1) {
@@ -185,10 +186,10 @@ int main(int argc, char *argv[]) {
             case 'V':
                 set_env(optarg);
                 break;
-            case ':':  
+            case ':':
                 fprintf(stderr, "option -%c requires an argument\n", optopt);
                 break;
-            case '?':   
+            case '?':
                 if (optopt != 0)
                     fprintf(stderr, "invalid option: -%c\n", optopt);
                 else
