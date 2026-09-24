@@ -11,6 +11,24 @@
 
 extern char **environ;
 
+static int is_unlimited(rlim_t v) {
+    if (v == RLIM_INFINITY) return 1;
+#ifdef RLIM_SAVED_MAX
+    if (v == RLIM_SAVED_MAX) return 1;
+#endif
+#ifdef RLIM_SAVED_CUR
+    if (v == RLIM_SAVED_CUR) return 1;
+#endif
+    return 0;
+}
+
+static void print_rlim_value(rlim_t v) {
+    if (is_unlimited(v))
+        printf("unlimited");
+    else
+        printf("%llu", (unsigned long long)v);
+}
+
 void print_ids(void) {
     uid_t ruid = getuid(), euid = geteuid();
     gid_t rgid = getgid(), egid = getegid();
@@ -40,8 +58,11 @@ void print_pids(void) {
 void print_ulimit(void) {
     struct rlimit rl;
     if (getrlimit(RLIMIT_FSIZE, &rl) == 0) {
-        printf("ulimit (RLIMIT_FSIZE): soft=%lld, hard=%lld\n",
-               (long long)rl.rlim_cur, (long long)rl.rlim_max);
+        printf("ulimit (RLIMIT_FSIZE): soft=");
+        print_rlim_value(rl.rlim_cur);
+        printf(", hard=");
+        print_rlim_value(rl.rlim_max);
+        printf("\n");
     } else {
         perror("getrlimit(RLIMIT_FSIZE)");
     }
@@ -71,8 +92,11 @@ void set_ulimit(const char *val) {
 void print_core(void) {
     struct rlimit rl;
     if (getrlimit(RLIMIT_CORE, &rl) == 0) {
-        printf("core size: soft=%lld, hard=%lld\n",
-               (long long)rl.rlim_cur, (long long)rl.rlim_max);
+        printf("core size: soft=");
+        print_rlim_value(rl.rlim_cur);
+        printf(", hard=");
+        print_rlim_value(rl.rlim_max);
+        printf("\n");
     } else {
         perror("getrlimit(RLIMIT_CORE)");
     }
