@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -10,11 +9,14 @@
 #include <errno.h>
 #include <limits.h>
 
-#ifndef RLIMIT_NPROC
-#define RLIMIT_NPROC 6
-#endif
-
 extern char **environ;
+
+#define MAX_ACTIONS 256
+
+struct action {
+    int opt;
+    char *arg;
+};
 
 static int is_unlimited(rlim_t v) {
     if (v == RLIM_INFINITY) return 1;
@@ -34,7 +36,9 @@ static void print_rlim_value(rlim_t v) {
         printf("%llu", (unsigned long long)v);
 }
 
-void print_ids(void) {
+
+
+void do_i(void) {
     uid_t ruid = getuid(), euid = geteuid();
     gid_t rgid = getgid(), egid = getegid();
     struct passwd *pw;
@@ -54,65 +58,96 @@ void print_ids(void) {
     if (gr) printf("effective group=%s\n", gr->gr_name);
 }
 
-void print_pids(void) {
-    printf("pid=%d\n", (int)getpid());
+void do_s(void) {
+    if (setpgid(0, 0) != 0)
+        perror("setpgid");
+    else
+        printf("became process group leader, pgid=%d\n", (int)getpgrp());
+}
+
+void do_p(void) {
+    printf("pid=%d\n",  (int)getpid());
     printf("ppid=%d\n", (int)getppid());
     printf("pgid=%d\n", (int)getpgrp());
 }
 
-void print_ulimit(void) {
+
+void do_u(void) {
     struct rlimit rl;
-    if (getrlimit(RLIMIT_NPROC, &rl) == 0) {
+    if (getrlimit(RLIMIT_FSIZE, &rl) == 0) {
         print_rlim_value(rl.rlim_cur);
         printf("\n");
     } else {
-        perror("getrlimit(RLIMIT_NPROC)");
+        perror("getrlimit(RLIMIT_FSIZE)");
     }
 }
 
-static void set_rlimit_soft(int resource, const char *val, const char *name) {
+
+void do_U(const char *val) {
     char *end;
     long v;
     struct rlimit rl;
 
+    if (val == NULL) {
+        fprintf(stderr, "-U requires a value\n");
+        return;
+    }
+
     errno = 0;
     v = strtol(val, &end, 10);
     if (errno != 0 || end == val || *end != '\0' || v < 0) {
-        fprintf(stderr, "invalid %s value: '%s'\n", name, val);
+        fprintf(stderr, "invalid ulimit value: '%s'\n", val);
         return;
     }
 
-    if (getrlimit(resource, &rl) != 0) {
-        perror("getrlimit");
+    if (getrlimit(RLIMIT_FSIZE, &rl) != 0) {
+        perror("getrlimit(RLIMIT_FSIZE)");
         return;
     }
     rl.rlim_cur = (rlim_t)v;
-    if (setrlimit(resource, &rl) != 0)
-        perror("setrlimit");
+    if (setrlimit(RLIMIT_FSIZE, &rl) != 0)
+        perror("setrlimit(RLIMIT_FSIZE)");
 }
 
-void set_ulimit(const char *val) {
-    set_rlimit_soft(RLIMIT_NPROC, val, "ulimit");
-}
-
-void print_core(void) {
+/* -c: размер core-файла в байтах */
+void do_c(void) {
     struct rlimit rl;
     if (getrlimit(RLIMIT_CORE, &rl) == 0) {
-        printf("core size: soft=");
         print_rlim_value(rl.rlim_cur);
-        printf(", hard=");
-        print_rlim_value(rl.rlim_max);
         printf("\n");
     } else {
         perror("getrlimit(RLIMIT_CORE)");
     }
 }
 
-void set_core(const char *val) {
-    set_rlimit_soft(RLIMIT_CORE, val, "core size");
+
+void do_C(const char *val) {
+    char *end;
+    long v;
+    struct rlimit rl;
+
+    if (val == NULL) {
+        fprintf(stderr, "-C requires a value\n");
+        return;
+    }
+
+    errno = 0;
+    v = strtol(val, &end, 10);
+    if (errno != 0 || end == val || *end != '\0' || v < 0) {
+        fprintf(stderr, "invalid core size: '%s'\n", val);
+        return;
+    }
+
+    if (getrlimit(RLIMIT_CORE, &rl) != 0) {
+        perror("getrlimit(RLIMIT_CORE)");
+        return;
+    }
+    rl.rlim_cur = (rlim_t)v;
+    if (setrlimit(RLIMIT_CORE, &rl) != 0)
+        perror("setrlimit(RLIMIT_CORE)");
 }
 
-void print_cwd(void) {
+void do_d(void) {
     char buf[PATH_MAX];
     if (getcwd(buf, sizeof(buf)) != NULL)
         printf("cwd=%s\n", buf);
@@ -120,20 +155,29 @@ void print_cwd(void) {
         perror("getcwd");
 }
 
-void print_env(void) {
+void do_v(void) {
     for (char **e = environ; *e != NULL; e++)
         printf("%s\n", *e);
 }
 
-void set_env(const char *arg) {
-    char *eq = strchr(arg, '=');
+void do_V(const char *arg) {
+    char *eq;
+    size_t namelen;
+    char *name;
+
+    if (arg == NULL) {
+        fprintf(stderr, "-V requires a value\n");
+        return;
+    }
+
+    eq = strchr(arg, '=');
     if (eq == NULL || eq == arg) {
         fprintf(stderr, "invalid -V format (expected name=value): '%s'\n", arg);
         return;
     }
 
-    size_t namelen = (size_t)(eq - arg);
-    char *name = malloc(namelen + 1);
+    namelen = (size_t)(eq - arg);
+    name = malloc(namelen + 1);
     if (name == NULL) {
         perror("malloc");
         return;
@@ -147,56 +191,47 @@ void set_env(const char *arg) {
     free(name);
 }
 
+
+
 int main(int argc, char *argv[]) {
     int opt;
+    struct action actions[MAX_ACTIONS];
+    int n = 0;
+
     opterr = 0;
 
     while ((opt = getopt(argc, argv, ":ispuU:cC:dvV:")) != -1) {
-        switch (opt) {
-            case 'i':
-                print_ids();
-                break;
-            case 's':
-                if (setpgid(0, 0) != 0)
-                    perror("setpgid");
-                else
-                    printf("became process group leader, pgid=%d\n", (int)getpgrp());
-                break;
-            case 'p':
-                print_pids();
-                break;
-            case 'u':
-                print_ulimit();
-                break;
-            case 'U':
-                set_ulimit(optarg);
-                break;
-            case 'c':
-                print_core();
-                break;
-            case 'C':
-                set_core(optarg);
-                break;
-            case 'd':
-                print_cwd();
-                break;
-            case 'v':
-                print_env();
-                break;
-            case 'V':
-                set_env(optarg);
-                break;
-            case ':':
+        if (n >= MAX_ACTIONS) {
+            fprintf(stderr, "too many options\n");
+            return 1;
+        }
+        if (opt == ':' || opt == '?') {
+
+            if (opt == ':')
                 fprintf(stderr, "option -%c requires an argument\n", optopt);
-                break;
-            case '?':
-                if (optopt != 0)
-                    fprintf(stderr, "invalid option: -%c\n", optopt);
-                else
-                    fprintf(stderr, "invalid option\n");
-                break;
-            default:
-                break;
+            else if (optopt != 0)
+                fprintf(stderr, "invalid option: -%c\n", optopt);
+            else
+                fprintf(stderr, "invalid option\n");
+            continue;
+        }
+        actions[n].opt = opt;
+        actions[n].arg = optarg;
+        n++;
+    }
+
+    for (int k = n - 1; k >= 0; k--) {
+        switch (actions[k].opt) {
+            case 'i': do_i();            break;
+            case 's': do_s();            break;
+            case 'p': do_p();            break;
+            case 'u': do_u();            break;
+            case 'U': do_U(actions[k].arg); break;
+            case 'c': do_c();            break;
+            case 'C': do_C(actions[k].arg); break;
+            case 'd': do_d();            break;
+            case 'v': do_v();            break;
+            case 'V': do_V(actions[k].arg); break;
         }
     }
 
