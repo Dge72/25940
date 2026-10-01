@@ -68,9 +68,16 @@ static int set_task_max_processes(unsigned long long v) {
             if (rctlblk_get_privilege(blk) == RCPRIV_BASIC) {
                 memcpy(new_blk, blk, rctlblk_size());
                 rctlblk_set_value(new_blk, (rctl_qty_t)v);
-                if (setrctl("task.max-processes", blk, new_blk,
-                            RCTL_REPLACE) == 0)
+
+                errno = 0;
+                if (setrctl("task.max-processes", NULL, new_blk,
+                            RCTL_SET) == 0) {
                     rc = 0;
+                } else {
+                    fprintf(stderr,
+                            "setrctl RCTL_SET failed: %s (errno=%d)\n",
+                            strerror(errno), errno);
+                }
                 break;
             }
         } while (getrctl("task.max-processes", blk, blk, RCTL_NEXT) == 0);
@@ -156,8 +163,15 @@ void set_ulimit(const char *val) {
         fprintf(stderr, "invalid ulimit value: '%s'\n", val);
         return;
     }
-    if (set_task_max_processes((unsigned long long)v) != 0)
-        fprintf(stderr, "set_ulimit: cannot set task.max-processes\n");
+
+    if (set_task_max_processes((unsigned long long)v) != 0) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd),
+                 "prctl -n task.max-processes -v %ld %d >/dev/null 2>&1",
+                 v, (int)getpid());
+        if (system(cmd) != 0)
+            fprintf(stderr, "set_ulimit: cannot set task.max-processes\n");
+    }
 #else
     set_rlimit_soft(RLIMIT_NPROC, val, "ulimit");
 #endif
