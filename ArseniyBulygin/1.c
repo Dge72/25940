@@ -57,6 +57,17 @@ void print_pids(void) {
 
 void print_ulimit(void) {
 #if defined(__sun) || defined(__sunos)
+    FILE *f = popen("prctl -n task.max-processes $$ 2>/dev/null | "
+                    "awk '/basic/ {print $2; exit}'", "r");
+    if (f) {
+        char buf[64];
+        if (fgets(buf, sizeof(buf), f)) {
+            printf("%s", buf);
+            pclose(f);
+            return;
+        }
+        pclose(f);
+    }
     long max = sysconf(_SC_CHILD_MAX);
     if (max != -1)
         printf("%ld\n", max);
