@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -8,6 +9,11 @@
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
+
+#if defined(__sun) || defined(__sunos)
+#include <rctl.h>
+#include <sys/rctl.h>
+#endif
 
 extern char **environ;
 
@@ -28,6 +34,45 @@ static void print_rlim_value(rlim_t v) {
     else
         printf("%llu", (unsigned long long)v);
 }
+
+#if defined(__sun) || defined(__sunos)
+static int get_task_max_processes(unsigned long long *out) {
+    rctlblk_t *blk = malloc(rctlblk_size());
+    if (!blk) return -1;
+
+    int found = 0;
+    if (getrctl("task.max-processes", NULL, blk, RCTL_FIRST) == 0) {
+        do {
+            if (rctlblk_get_privilege(blk) == RCPRIV_BASIC) {
+                *out = (unsigned long long)rctlblk_get_value(blk);
+                found = 1;
+                break;
+            }
+        } while (getrctl("task.max-processes", blk, blk, RCTL_NEXT) == 0);
+    }
+    free(blk);
+    return found ? 0 : -1;
+}
+
+static int set_task_max_processes(unsigned long long v) {
+    rctlblk_t *blk = malloc(rctlblk_size());
+    if (!blk) return -1;
+
+    int rc = -1;
+    if (getrctl("task.max-processes", NULL, blk, RCTL_FIRST) == 0) {
+        do {
+            if (rctlblk_get_privilege(blk) == RCPRIV_BASIC) {
+                rctlblk_set_value(blk, (rctl_qty_t)v);
+                if (setrctl("task.max-processes", blk, RCTL_REPLACE) == 0)
+                    rc = 0;
+                break;
+            }
+        } while (getrctl("task.max-processes", blk, blk, RCTL_NEXT) == 0);
+    }
+    free(blk);
+    return rc;
+}
+#endif
 
 void print_ids(void) {
     uid_t ruid = getuid(), euid = geteuid();
@@ -57,20 +102,9 @@ void print_pids(void) {
 
 void print_ulimit(void) {
 #if defined(__sun) || defined(__sunos)
-    FILE *f = popen("prctl -n task.max-processes $$ 2>/dev/null | "
-                    "awk '/basic/ {print $2; exit}'", "r");
-    if (f) {
-        char buf[64];
-        if (fgets(buf, sizeof(buf), f)) {
-            printf("%s", buf);
-            pclose(f);
-            return;
-        }
-        pclose(f);
-    }
-    long max = sysconf(_SC_CHILD_MAX);
-    if (max != -1)
-        printf("%ld\n", max);
+    unsigned long long v;
+    if (get_task_max_processes(&v) == 0)
+        printf("%llu\n", v);
     else
         printf("unlimited\n");
 #else
@@ -115,17 +149,8 @@ void set_ulimit(const char *val) {
         fprintf(stderr, "invalid ulimit value: '%s'\n", val);
         return;
     }
-
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-             "prctl -n task.max-processes -v %ld %d >/dev/null 2>&1",
-             v, (int)getpid());
-    int rc = system(cmd);
-    if (rc != 0) {
-        fprintf(stderr,
-                "set_ulimit: prctl failed on illumos "
-                "(need PRIV_SYS_RESOURCE or project limit)\n");
-    }
+    if (set_task_max_processes((unsigned long long)v) != 0)
+        fprintf(stderr, "set_ulimit: cannot set task.max-processes\n");
 #else
     set_rlimit_soft(RLIMIT_NPROC, val, "ulimit");
 #endif
