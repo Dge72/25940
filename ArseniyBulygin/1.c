@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -56,20 +55,28 @@ static int get_task_max_processes(unsigned long long *out) {
 
 static int set_task_max_processes(unsigned long long v) {
     rctlblk_t *blk = malloc(rctlblk_size());
-    if (!blk) return -1;
+    rctlblk_t *new_blk = malloc(rctlblk_size());
+    if (!blk || !new_blk) {
+        free(blk);
+        free(new_blk);
+        return -1;
+    }
 
     int rc = -1;
     if (getrctl("task.max-processes", NULL, blk, RCTL_FIRST) == 0) {
         do {
             if (rctlblk_get_privilege(blk) == RCPRIV_BASIC) {
-                rctlblk_set_value(blk, (rctl_qty_t)v);
-                if (setrctl("task.max-processes", blk, RCTL_REPLACE) == 0)
+                memcpy(new_blk, blk, rctlblk_size());
+                rctlblk_set_value(new_blk, (rctl_qty_t)v);
+                if (setrctl("task.max-processes", blk, new_blk,
+                            RCTL_REPLACE) == 0)
                     rc = 0;
                 break;
             }
         } while (getrctl("task.max-processes", blk, blk, RCTL_NEXT) == 0);
     }
     free(blk);
+    free(new_blk);
     return rc;
 }
 #endif
