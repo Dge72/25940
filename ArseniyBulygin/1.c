@@ -52,40 +52,6 @@ static int get_task_max_processes(unsigned long long *out) {
     free(blk);
     return found ? 0 : -1;
 }
-
-static int set_task_max_processes(unsigned long long v) {
-    rctlblk_t *blk = malloc(rctlblk_size());
-    rctlblk_t *new_blk = malloc(rctlblk_size());
-    if (!blk || !new_blk) {
-        free(blk);
-        free(new_blk);
-        return -1;
-    }
-
-    int rc = -1;
-    if (getrctl("task.max-processes", NULL, blk, RCTL_FIRST) == 0) {
-        do {
-            if (rctlblk_get_privilege(blk) == RCPRIV_BASIC) {
-                memcpy(new_blk, blk, rctlblk_size());
-                rctlblk_set_value(new_blk, (rctl_qty_t)v);
-
-                errno = 0;
-                if (setrctl("task.max-processes", NULL, new_blk,
-                            RCTL_SET) == 0) {
-                    rc = 0;
-                } else {
-                    fprintf(stderr,
-                            "setrctl RCTL_SET failed: %s (errno=%d)\n",
-                            strerror(errno), errno);
-                }
-                break;
-            }
-        } while (getrctl("task.max-processes", blk, blk, RCTL_NEXT) == 0);
-    }
-    free(blk);
-    free(new_blk);
-    return rc;
-}
 #endif
 
 void print_ids(void) {
@@ -164,14 +130,13 @@ void set_ulimit(const char *val) {
         return;
     }
 
-    if (set_task_max_processes((unsigned long long)v) != 0) {
-        char cmd[256];
-        snprintf(cmd, sizeof(cmd),
-                 "prctl -n task.max-processes -v %ld %d >/dev/null 2>&1",
-                 v, (int)getpid());
-        if (system(cmd) != 0)
-            fprintf(stderr, "set_ulimit: cannot set task.max-processes\n");
-    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "prctl -n task.max-processes -v %ld %d >/dev/null 2>&1",
+             v, (int)getpid());
+    int rc = system(cmd);
+    if (rc != 0)
+        fprintf(stderr, "set_ulimit: prctl failed\n");
 #else
     set_rlimit_soft(RLIMIT_NPROC, val, "ulimit");
 #endif
