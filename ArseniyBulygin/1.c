@@ -96,8 +96,25 @@ static void set_rlimit_soft(int resource, const char *val, const char *name) {
 
 void set_ulimit(const char *val) {
 #if defined(__sun) || defined(__sunos)
-    fprintf(stderr, "set_ulimit: not supported on SunOS/illumos\n");
-    (void)val;
+    char *end;
+    long v;
+    errno = 0;
+    v = strtol(val, &end, 10);
+    if (errno != 0 || end == val || *end != '\0' || v <= 0) {
+        fprintf(stderr, "invalid ulimit value: '%s'\n", val);
+        return;
+    }
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "prctl -n task.max-processes -v %ld %d >/dev/null 2>&1",
+             v, (int)getpid());
+    int rc = system(cmd);
+    if (rc != 0) {
+        fprintf(stderr,
+                "set_ulimit: prctl failed on illumos "
+                "(need PRIV_SYS_RESOURCE or project limit)\n");
+    }
 #else
     set_rlimit_soft(RLIMIT_NPROC, val, "ulimit");
 #endif
