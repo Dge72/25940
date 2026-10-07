@@ -46,45 +46,34 @@ int main(int argc, char *argv[])
                        getpid(), getpgrp(), getppid());
                 break;
 
-            case 'u':
-#if defined(__sun) || defined(__sunos)
-                {
-                    long max = sysconf(_SC_CHILD_MAX);
-                    if (max != -1)
-                        printf("ULIMIT - %ld\n", max);
-                    else
-                        printf("ULIMIT - unlimited\n");
-                }
-#else
-                {
-                    struct rlimit tmp;
-                    if (getrlimit(RLIMIT_NPROC, &tmp) == 0)
-                        printf("ULIMIT - %ld\n", (long)tmp.rlim_cur);
-                    else
-                        perror("getrlimit(RLIMIT_NPROC)");
-                }
-#endif
-                break;
+case 'u':
+    {
+        errno = 0;
+        long v = ulimit(UL_GETFSIZE);
+        if (v == -1 && errno != 0)
+            perror("ulimit(UL_GETFSIZE)");
+        else if (v == -1)
+            printf("ULIMIT - unlimited\n");
+        else
+            printf("ULIMIT - %ld\n", v);
+    }
+    break;
 
-            case 'U':
-                {
-                    long new_limit = atol(optarg);
-
-#if defined(__sun) || defined(__sunos)
-                    char cmd[256];
-                    snprintf(cmd, sizeof(cmd),
-                             "prctl -n task.max-processes -v %ld %d >/dev/null 2>&1",
-                             new_limit, (int)getpid());
-                    if (system(cmd) != 0)
-                        fprintf(stderr, "set_ulimit: prctl failed\n");
-#else
-                    struct rlimit tmp;
-                    if (getrlimit(RLIMIT_NPROC, &tmp) == 0) {
-                        tmp.rlim_cur = (rlim_t)new_limit;
-                        if (setrlimit(RLIMIT_NPROC, &tmp) != 0)
-                            perror("setrlimit(RLIMIT_NPROC)");
-                    }
-#endif
+case 'U':
+    {
+        char *end;
+        errno = 0;
+        long new_limit = strtol(optarg, &end, 10);
+        if (errno != 0 || end == optarg || *end != '\0') {
+            fprintf(stderr, "invalid -U value: '%s'\n", optarg);
+            break;
+        }
+        errno = 0;
+        long r = ulimit(UL_SETFSIZE, new_limit);
+        if (r == -1 && errno != 0)
+            perror("ulimit(UL_SETFSIZE)");
+    }
+    break;
                 }
                 break;
 
