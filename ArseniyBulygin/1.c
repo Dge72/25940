@@ -1,236 +1,147 @@
-#define _GNU_SOURCE
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/resource.h>
-#include <pwd.h>
-#include <grp.h>
+#include <sys/syscall.h>
 #include <string.h>
-#include <errno.h>
-#include <limits.h>
+#include <sys/resource.h>
+#include <ulimit.h>
+
+extern char *optarg;
+extern int optind, opterr, optopt;
 
 extern char **environ;
 
-static int is_unlimited(rlim_t v)
-{
-    if (v == RLIM_INFINITY)
-        return 1;
+static int is_unlimited(rlim_t v) {
+    if (v == RLIM_INFINITY) return 1;
 #ifdef RLIM_SAVED_MAX
-    if (v == RLIM_SAVED_MAX)
-        return 1;
+    if (v == RLIM_SAVED_MAX) return 1;
 #endif
 #ifdef RLIM_SAVED_CUR
-    if (v == RLIM_SAVED_CUR)
-        return 1;
+    if (v == RLIM_SAVED_CUR) return 1;
 #endif
     return 0;
 }
 
-static void print_rlim_value(rlim_t v)
-{
-    if (is_unlimited(v))
-        printf("unlimited");
-    else
-        printf("%llu", (unsigned long long)v);
-}
-
-void print_ids(void)
-{
-    uid_t ruid = getuid(), euid = geteuid();
-    gid_t rgid = getgid(), egid = getegid();
-    struct passwd *pw;
-    struct group *gr;
-
-    printf("real uid=%d, effective uid=%d\n", (int)ruid, (int)euid);
-    printf("real gid=%d, effective gid=%d\n", (int)rgid, (int)egid);
-
-    pw = getpwuid(ruid);
-    if (pw)
-        printf("real user=%s\n", pw->pw_name);
-    pw = getpwuid(euid);
-    if (pw)
-        printf("effective user=%s\n", pw->pw_name);
-
-    gr = getgrgid(rgid);
-    if (gr)
-        printf("real group=%s\n", gr->gr_name);
-    gr = getgrgid(egid);
-    if (gr)
-        printf("effective group=%s\n", gr->gr_name);
-}
-
-void print_pids(void)
-{
-    printf("pid=%d\n", (int)getpid());
-    printf("ppid=%d\n", (int)getppid());
-    printf("pgid=%d\n", (int)getpgrp());
-}
-
-static void set_rlimit_soft(int resource, const char *val, const char *name)
-{
-    char *end;
-    long v;
-    struct rlimit rl;
-
-    errno = 0;
-    v = strtol(val, &end, 10);
-    if (errno != 0 || end == val || *end != '\0' || v < 0) {
-        fprintf(stderr, "invalid %s value: '%s'\n", name, val);
-        return;
-    }
-
-    if (getrlimit(resource, &rl) != 0) {
-        perror("getrlimit");
-        return;
-    }
-
-    /* Soft limit cannot exceed hard limit */
-    if ((rlim_t)v > rl.rlim_max) {
-        fprintf(stderr, "%s: value %ld exceeds hard limit ", name, v);
-        print_rlim_value(rl.rlim_max);
-        fprintf(stderr, "\n");
-        return;
-    }
-
-    rl.rlim_cur = (rlim_t)v;
-    if (setrlimit(resource, &rl) != 0)
-        perror("setrlimit");
-}
-
-void print_ulimit(void)
-{
-    struct rlimit rl;
-    if (getrlimit(RLIMIT_NPROC, &rl) == 0) {
-        print_rlim_value(rl.rlim_cur);
-        printf("\n");
-    } else {
-        perror("getrlimit(RLIMIT_NPROC)");
-    }
-}
-
-void set_ulimit(const char *val)
-{
-    set_rlimit_soft(RLIMIT_NPROC, val, "ulimit");
-}
-
-void print_core(void)
-{
-    struct rlimit rl;
-    if (getrlimit(RLIMIT_CORE, &rl) == 0) {
-        printf("core size: soft=");
-        print_rlim_value(rl.rlim_cur);
-        printf(", hard=");
-        print_rlim_value(rl.rlim_max);
-        printf("\n");
-    } else {
-        perror("getrlimit(RLIMIT_CORE)");
-    }
-}
-
-void set_core(const char *val)
-{
-    set_rlimit_soft(RLIMIT_CORE, val, "core size");
-}
-
-void print_cwd(void)
-{
-    char buf[PATH_MAX];
-    if (getcwd(buf, sizeof(buf)) != NULL)
-        printf("cwd=%s\n", buf);
-    else
-        perror("getcwd");
-}
-
-void print_env(void)
-{
-    for (char **e = environ; *e != NULL; e++)
-        printf("%s\n", *e);
-}
-
-void set_env(const char *arg)
-{
-    char *eq = strchr(arg, '=');
-    if (eq == NULL || eq == arg) {
-        fprintf(stderr, "invalid -V format (expected name=value): '%s'\n", arg);
-        return;
-    }
-
-    size_t namelen = (size_t)(eq - arg);
-    char *name = malloc(namelen + 1);
-    if (name == NULL) {
-        perror("malloc");
-        return;
-    }
-    memcpy(name, arg, namelen);
-    name[namelen] = '\0';
-
-    if (setenv(name, eq + 1, 1) != 0)
-        perror("setenv");
-
-    free(name);
-}
-
 int main(int argc, char *argv[])
 {
-    int opt;
-    opterr = 0;   /* сами обрабатываем ошибки */
+    const char *optstring = "ispuU:cC:dvV:";
 
-    while ((opt = getopt(argc, argv, ":ispuU:cC:dvV:")) != -1) {
-        switch (opt) {
-        case 'i':
-            print_ids();
-            break;
-        case 's':
-            if (setpgid(0, 0) != 0)
-                perror("setpgid");
-            else
-                printf("became process group leader, pgid=%d\n", (int)getpgrp());
-            break;
-        case 'p':
-            print_pids();
-            break;
-        case 'u':
-            print_ulimit();
-            break;
-        case 'U':
-            set_ulimit(optarg);
-            break;
-        case 'c':
-            print_core();
-            break;
-        case 'C':
-            set_core(optarg);
-            break;
-        case 'd':
-            print_cwd();
-            break;
-        case 'v':
-            print_env();
-            break;
-        case 'V':
-            set_env(optarg);
-            break;
-        case ':':
-            fprintf(stderr, "option -%c requires an argument\n", optopt);
-            break;
-        case '?':
-            if (optopt != 0)
-                fprintf(stderr, "invalid option: -%c\n", optopt);
-            else
-                fprintf(stderr, "invalid option\n");
-            break;
-        default:
-            break;
+    int flag;
+
+    while((flag = getopt(argc, argv, optstring)) != -1)
+    {
+        switch(flag)
+        {
+            case 'i':
+                printf("UID - %d\teUID - %d\tGID - %d\teGID - %d\n",
+                       getuid(), geteuid(), getgid(), getegid());
+                break;
+
+            case 's':
+                setpgrp();
+                break;
+
+            case 'p':
+                printf("PID - %d\tPGID - %d\tPPID - %d\n",
+                       getpid(), getpgrp(), getppid());
+                break;
+
+            case 'u':
+#if defined(__sun) || defined(__sunos)
+                {
+                    long max = sysconf(_SC_CHILD_MAX);
+                    if (max != -1)
+                        printf("ULIMIT - %ld\n", max);
+                    else
+                        printf("ULIMIT - unlimited\n");
+                }
+#else
+                {
+                    struct rlimit tmp;
+                    if (getrlimit(RLIMIT_NPROC, &tmp) == 0)
+                        printf("ULIMIT - %ld\n", (long)tmp.rlim_cur);
+                    else
+                        perror("getrlimit(RLIMIT_NPROC)");
+                }
+#endif
+                break;
+
+            case 'U':
+                {
+                    long new_limit = atol(optarg);
+
+#if defined(__sun) || defined(__sunos)
+                    char cmd[256];
+                    snprintf(cmd, sizeof(cmd),
+                             "prctl -n task.max-processes -v %ld %d >/dev/null 2>&1",
+                             new_limit, (int)getpid());
+                    if (system(cmd) != 0)
+                        fprintf(stderr, "set_ulimit: prctl failed\n");
+#else
+                    struct rlimit tmp;
+                    if (getrlimit(RLIMIT_NPROC, &tmp) == 0) {
+                        tmp.rlim_cur = (rlim_t)new_limit;
+                        if (setrlimit(RLIMIT_NPROC, &tmp) != 0)
+                            perror("setrlimit(RLIMIT_NPROC)");
+                    }
+#endif
+                }
+                break;
+
+            case 'c':
+                {
+                    struct rlimit tmp;
+                    if (getrlimit(RLIMIT_CORE, &tmp) == 0) {
+                        printf("CORE - ");
+                        if (is_unlimited(tmp.rlim_cur))
+                            printf("unlimited\n");
+                        else
+                            printf("%llu\n",
+                                   (unsigned long long)tmp.rlim_cur);
+                    } else {
+                        perror("getrlimit(RLIMIT_CORE)");
+                    }
+                }
+                break;
+
+            case 'C':
+                {
+                    long new_size = atol(optarg);
+                    struct rlimit tmp;
+                    if (getrlimit(RLIMIT_CORE, &tmp) != 0) {
+                        perror("getrlimit(RLIMIT_CORE)");
+                        break;
+                    }
+                    tmp.rlim_cur = (rlim_t)new_size;
+                    if (setrlimit(RLIMIT_CORE, &tmp) != 0)
+                        perror("setrlimit(RLIMIT_CORE)");
+                }
+                break;
+
+            case 'd':
+                printf("DIR - %s\n", getcwd(NULL, 0));
+                break;
+
+            case 'v':
+                {
+                    int cur = 0;
+                    while(environ[cur] != NULL)
+                        printf("%s\n", environ[cur++]);
+                }
+                break;
+
+            case 'V':
+                putenv(optarg);
+                break;
+
+            case '?':
+                printf("Неизвестный аргумент - -%c\n", optopt);
+                break;
         }
     }
 
-    if (optind < argc) {
-        fprintf(stderr, "non-option arguments:");
-        for (int i = optind; i < argc; i++)
-            fprintf(stderr, " %s", argv[i]);
-        fprintf(stderr, "\n");
-    }
+    for(int i = optind; i < argc; i++)
+        printf("Неподдерживаемый аргумент - %s\n", argv[i]);
 
     return 0;
 }
